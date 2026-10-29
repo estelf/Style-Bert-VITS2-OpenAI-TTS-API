@@ -6,8 +6,9 @@ dist/
 build/
 .venv/
 
-# 学習済みモデル資産（ユーザーが配置する。git には入れない）
-/model_assets/
+# 学習済みモデル資産（ユーザーが配置する。ディレクトリ自体は .gitkeep で同梱し、中身を git 管理外にする）
+/model_assets/*
+!/model_assets/.gitkeep
 
 # 事前学習済みモデル（style_bert_vits2.pretrained のダウンロード成果物。全て HF からの取得物で git 管理外）
 /pretrained/
