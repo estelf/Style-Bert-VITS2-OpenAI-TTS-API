@@ -7,7 +7,7 @@ Pydantic の extra="ignore" で黙って無視し、既存 OpenAI クライア�
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -30,8 +30,12 @@ class SpeechRequest(BaseModel):
     model: str = Field(..., description="model_assets/ のモデル名")
     input: str = Field(..., description="合成テキスト")
     voice: str = Field(..., description="話者名")
-    response_format: str = Field(default="flac")
-    speed: float = Field(default=1.0)
+    response_format: Literal["flac"] = Field(
+        default="flac", description="本サーバーは flac のみ対応"
+    )
+    speed: float = Field(
+        default=1.0, ge=SPEED_MIN, le=SPEED_MAX, description="話速（大きいほど早い）"
+    )
 
     # --- 拡張フィールド（任意。None でコア既定値） ---
     sdp_ratio: float | None = None

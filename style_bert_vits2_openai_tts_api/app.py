@@ -18,7 +18,6 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
@@ -34,7 +33,7 @@ from .model_manager import (
     ModelRegistry,
     VoiceNotFound,
 )
-from .schemas import SPEED_MAX, SPEED_MIN, SpeechRequest, openai_error
+from .schemas import SpeechRequest, openai_error
 from .settings import Settings, get_settings
 from .startup_check import StartupError, ensure_bert_model, validate_assets_root
 
@@ -225,38 +224,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
         return {"object": "list", "data": data}
 
-    @app.post("/v1/audio/speech")
-    async def create_speech(request: Request) -> Response:
-        try:
-            payload = await request.json()
-            if not isinstance(payload, dict):
-                raise ValueError("body must be a JSON object")
-        except Exception:
-            return openai_error(
-                400, "Request body must be a JSON object", param=None
-            )
-
-        try:
-            req = SpeechRequest.model_validate(payload)
-        except ValidationError as e:
-            first = e.errors()[0] if e.errors() else {}
-            param = ".".join(str(loc) for loc in first.get("loc", ())) or None
-            return openai_error(400, str(first.get("msg", "Invalid request")), param=param)
-
-        if req.response_format not in MEDIA_TYPES:
-            return openai_error(
-                400,
-                f"Unsupported response_format `{req.response_format}`. "
-                f"This server only supports: {', '.join(MEDIA_TYPES)}.",
-                param="response_format",
-            )
-        if not SPEED_MIN <= req.speed <= SPEED_MAX:
-            return openai_error(
-                400,
-                f"speed must be between {SPEED_MIN} and {SPEED_MAX}",
-                param="speed",
-            )
-
+    @app.post(
+        "/v1/audio/speech",
+        response_class=Response,
+        summary="Create speech (OpenAI compatible)",
+        description="音声合成リクエスト。成功時は audio/flac のバイナリを返す。"
+        "本サーバーがサポートする response_format は flac のみ。"
+        "OpenAI 仕様に無いストリーミング等の未知フィールドは無視される。",
+        responses={
+            200: {
+                "description": "合成音声（FLAC）",
+                "content": {"audio/flac": {"schema": {"type": "string", "format": "binary"}}},
+            }
+        },
+    )
+    async def create_speech(req: SpeechRequest) -> Response:
+        # 注: response_format（flac のみ）と speed の範囲は SpeechRequest のスキーマで検証され、
+        # 失敗は RequestValidationError 経由で上記 exception_handler が OpenAI 形式の 400 JSON に変換する
         try:
             entry = registry.get_entry(req.model)
             speaker_id = registry.speaker_id(entry, req.voice)

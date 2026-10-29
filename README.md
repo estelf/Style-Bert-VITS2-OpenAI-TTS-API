@@ -137,6 +137,21 @@ with client.audio.speech.with_streaming_response.create(
 - `GET /v1/audio/voices` — 話者一覧（非標準。モデル名との対応付き）
 - `GET /health` — 生体確認（常駐モデル・BERT ロード状態つき）
 
+### インタラクティブドキュメント（Swagger UI / ReDoc）
+
+FastAPI 組み込みの API ドキュメントがそのまま使えます（サーバー起動後にブラウザで開くだけ。
+リクエストボディのスキーマ・値域（speed 0.25〜4.0、response_format=flac）は実装と同じ
+Pydantic モデルから自動生成されるため、常に実挙動と一致します）:
+
+| URL | 内容 |
+| --- | --- |
+| `http://127.0.0.1:8000/docs` | Swagger UI。`Try it out` で実際に合成リクエストを実行できる（音声はモデル初回ロード後のため数秒かかる） |
+| `http://127.0.0.1:8000/redoc` | ReDoc。読み専向けのリファレンス |
+| `http://127.0.0.1:8000/openapi.json` | OpenAPI 3.1 仕様書（機械可読）。他ツールとの連携用 |
+
+- ドキュメントページ自体に認証はありません。`--host 0.0.0.0` で公開する場合は、
+  到達できる相手がブラウザから合成を実行できる点も踏まえて利用環境を選んでください
+
 ## テスト
 
 ```bash
