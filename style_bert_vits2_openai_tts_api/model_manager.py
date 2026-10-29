@@ -159,8 +159,16 @@ class ModelRegistry:
             raise ModelNotFound(model_name, self.model_names)
         return entry
 
-    def speaker_id(self, entry: ModelEntry, voice: str) -> int:
-        """voice（話者名）をコアの speaker_id へ変換（無ければ VoiceNotFound）"""
+    def speaker_id(self, entry: ModelEntry, voice: str | None) -> int:
+        """voice（話者名）をコアの speaker_id へ変換（無ければ VoiceNotFound）。
+
+        voice が None（リクエストで省略・空文字）の場合はモデルの先頭話者を選択する。
+        本サーバーは 1 モデル = 1 話者前提なので、実質的に選択の余地は無い。
+        """
+        if voice is None:
+            if not entry.spk2id:
+                raise VoiceNotFound(entry.name, "(unspecified)", entry.speakers)
+            return next(iter(entry.spk2id.values()))
         if voice not in entry.spk2id:
             raise VoiceNotFound(entry.name, voice, entry.speakers)
         return entry.spk2id[voice]

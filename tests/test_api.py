@@ -88,6 +88,41 @@ def test_speech_unknown_voice_404(client: TestClient) -> None:
     assert r.json()["error"]["type"] == "not_found_error"
 
 
+# --- speech: voice 省略・空文字（1 モデル = 1 話者なので自動選択） ---
+
+
+def test_speech_voice_omitted_ok(client: TestClient) -> None:
+    # voice 省略は検証エラー（400）にも話者NotFound（404）にもならない（偽モデル合成のため 500 になり得る）
+    payload = _payload()
+    del payload["voice"]
+    r = client.post("/v1/audio/speech", json=payload)
+    assert r.status_code not in (400, 404)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "  \t\n"])
+def test_speech_voice_blank_treated_as_omitted(client: TestClient, blank: str) -> None:
+    r = client.post("/v1/audio/speech", json=_payload(voice=blank))
+    assert r.status_code not in (400, 404)
+
+
+def test_speech_request_voice_normalization() -> None:
+    from style_bert_vits2_openai_tts_api.schemas import SpeechRequest
+
+    base = {"model": "m", "input": "あ"}
+    assert SpeechRequest.model_validate(base).voice is None  # 省略
+    assert SpeechRequest.model_validate({**base, "voice": ""}).voice is None
+    assert SpeechRequest.model_validate({**base, "voice": "  "}).voice is None
+    assert SpeechRequest.model_validate({**base, "voice": " ok "}).voice == "ok"
+
+
+def test_speaker_id_auto_selects_model_speaker(tmp_path: Path) -> None:
+    write_fake_model(tmp_path, "m1", voice="solo")
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    reg.refresh()
+    entry = reg.get_entry("m1")
+    assert reg.speaker_id(entry, None) == entry.spk2id["solo"]
+
+
 def test_speech_unsupported_format_400(client: TestClient) -> None:
     r = client.post("/v1/audio/speech", json=_payload(response_format="mp3"))
     assert r.status_code == 400

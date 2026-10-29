@@ -29,7 +29,11 @@ class SpeechRequest(BaseModel):
     # --- OpenAI TTS 標準フィールド ---
     model: str = Field(..., description="model_assets/ のモデル名")
     input: str = Field(..., description="合成テキスト")
-    voice: str = Field(..., description="話者名")
+    voice: str | None = Field(
+        default=None,
+        description="話者名。本サーバーは 1 モデル = 1 話者のため省略・空文字なら"
+        "モデルの話者が自動選択される（指定する場合はモデル内に存在する話者名）",
+    )
     response_format: Literal["flac"] = Field(
         default="flac", description="本サーバーは flac のみ対応"
     )
@@ -53,11 +57,25 @@ class SpeechRequest(BaseModel):
             raise ValueError("input must not be empty")
         return v
 
-    @field_validator("model", "voice")
+    @field_validator("model")
     @classmethod
     def _not_blank(cls, v: str) -> str:
         if v.strip() == "":
             raise ValueError("must not be empty")
+        return v
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def _voice_blank_to_none(cls, v: Any) -> Any:
+        """空文字・空白のみの voice は「未指定」（None）として扱う。
+
+        1 モデル = 1 話者なので voice は実質補助的な情報であり、
+        OpenAI SDK のように voice 引数が必須のクライアントも空文字で送信できる。
+        """
+        if isinstance(v, str):
+            v = v.strip()
+            if v == "":
+                return None
         return v
 
 

@@ -58,6 +58,20 @@ def test_synth_returns_flac(real_client: TestClient) -> None:
     assert duration > 0.3
 
 
+def test_synth_without_voice_uses_model_speaker(real_client: TestClient) -> None:
+    """voice 省略・空文字でもモデルの単一話者で合成できる（1 モデル = 1 話者）"""
+    model, _ = _pick_model_voice(real_client)
+    for voice in (None, ""):
+        body = {"model": model, "input": "ぼいすをぬいてもよめます。"}
+        if voice is not None:
+            body["voice"] = voice
+        r = real_client.post("/v1/audio/speech", json=body)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "audio/flac"
+        audio, sr = sf.read(io.BytesIO(r.content))
+        assert len(audio) / sr > 0.3
+
+
 def test_speed_scales_duration(real_client: TestClient) -> None:
     """speed=2.0（length=0.5）は speed=1.0 より明らかに短い"""
     model, voice = _pick_model_voice(real_client)

@@ -13,7 +13,8 @@
   ダウンロードは HTTP bind 前に完結し、リクエスト中に 1.2GB が走り出すことはありません）
 - **認証なし / 一括レスポンス（flac のみ）** — ローカル〜LAN 利用向けの構成
 - **スタイル指定なし**: 同梱環境のモデルは単話者・Neutral のみのため、`style` 等は持たせず
-  内部で Neutral 固定。話者（voice）とOpenAI標準パラメータに集中した薄い API です
+  内部で Neutral 固定。話者（voice）とOpenAI標準パラメータに集中した薄い API です。
+  1 モデル = 1 話者なので `voice` は省略・空文字でも読み通せます（話者自動選択）
 
 ## セットアップ
 
@@ -99,7 +100,8 @@ uv run style-bert-vits2-openai-tts-api --host 0.0.0.0 --port 8000
 ```
 
 - `model`: `model_assets/` のモデル名
-- `voice`: 話者名（config.json の spk2id。現状のモデルは単話者でモデル名と同名）
+- `voice`: **省略可**。本サーバーは 1 モデル = 1 話者のため、省略・空文字ならモデルの話者が
+  自動選択されます。指定する場合は config.json の spk2id に存在する話者名（404 防止）
 - `response_format`: **`flac` のみ**（省略時既定）。mp3 等は 400 を返します
 - `speed`: 0.25〜4.0（OpenAI と同じく大きいほど早い。内部では length=1/speed）
 - 拡張フィールド（任意・省略可）: `sdp_ratio` / `noise` / `noise_w` / `pitch_scale` /
@@ -112,7 +114,7 @@ curl:
 ```bash
 curl -s http://127.0.0.1:8000/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"my-model","input":"こんにちは、はじめまして。","voice":"my-model"}' \
+  -d '{"model":"my-model","input":"こんにちは、はじめまして。"}' \
   --output speech.flac
 ```
 
@@ -124,7 +126,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")  # 認証なしなので api_key は無視されます
 with client.audio.speech.with_streaming_response.create(
     model="my-model",
-    voice="my-model",
+    voice="",  # SDK 側で引数が必須だが、空文字でよい（単一話者が自動選択される）
     input="こんにちは、はじめまして。",
     response_format="flac",
 ) as response:

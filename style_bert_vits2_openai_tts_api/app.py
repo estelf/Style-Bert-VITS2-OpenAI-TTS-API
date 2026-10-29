@@ -230,6 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary="Create speech (OpenAI compatible)",
         description="音声合成リクエスト。成功時は audio/flac のバイナリを返す。"
         "本サーバーがサポートする response_format は flac のみ。"
+        "1 モデル = 1 話者のため voice は省略・空文字可（モデルの話者が自動選択される）。"
         "OpenAI 仕様に無いストリーミング等の未知フィールドは無視される。",
         responses={
             200: {
