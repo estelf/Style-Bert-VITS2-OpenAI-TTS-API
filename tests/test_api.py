@@ -130,6 +130,26 @@ def test_speech_ignores_unknown_fields_shape(client: TestClient) -> None:
     assert r.status_code not in (400, 404) or "stream" not in r.text
 
 
+# --- CLI 引数 ---
+
+
+def test_cli_args_default_to_settings() -> None:
+    from style_bert_vits2_openai_tts_api import _parse_args
+    from style_bert_vits2_openai_tts_api.settings import get_settings
+
+    args = _parse_args([])
+    assert args.host == get_settings().host
+    assert args.port == get_settings().port
+
+
+def test_cli_args_override_host_and_port() -> None:
+    from style_bert_vits2_openai_tts_api import _parse_args
+
+    args = _parse_args(["--host", "0.0.0.0", "--port", "9000"])
+    assert args.host == "0.0.0.0"
+    assert args.port == 9000
+
+
 # --- ModelRegistry の規約 ---
 
 

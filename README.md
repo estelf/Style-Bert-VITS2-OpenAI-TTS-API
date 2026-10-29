@@ -57,9 +57,14 @@ uv run -m style_bert_vits2.pretrained --check                 # 完備チェッ�
 ```bash
 uv run style-bert-vits2-openai-tts-api
 # → http://127.0.0.1:8000  (OpenAI 互換: POST /v1/audio/speech)
+
+# 全インターフェースで待ち受け（LAN 公開など）
+uv run style-bert-vits2-openai-tts-api --host 0.0.0.0 --port 8000
 ```
 
-初回起動は BERT の取得＋ロードで数分かかります。2 回目以降は BERT / G2P / 指定モデルの
+- バインド先は **CLI 引数 `--host` / `--port` > 環境変数 `HOST` / `PORT` > 既定（127.0.0.1 / 8000）** の順で解決します
+- 認証なしで動くため、`--host 0.0.0.0` は **信頼できるネットワーク内での利用を前提**にしてください。到達できる相手は誰でも合成できます
+- 初回起動は BERT の取得＋ロードで数分かかります。2 回目以降は BERT / G2P / 指定モデルの
 ロードまで**起動時に完了**します（合成のダミー実行は不要。CUDA 初回カーネル初期化の
 数秒まで吸収したいときだけ `WARMUP_SYNTH=1` をオプションで有効化）。
 
@@ -67,7 +72,7 @@ uv run style-bert-vits2-openai-tts-api
 
 | 変数 | 既定 | 説明 |
 | --- | --- | --- |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | bind 先 |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | bind 先（`--host` / `--port` があればそちらが優先） |
 | `DEVICE` | `cuda` | 推論デバイス（CUDA 無ければ cpu へ自動フォールバック） |
 | `DTYPE` | `float16` | 合成モデルの精度（`float16` / `float32`） |
 | `MAX_RESIDENT_MODELS` | `2` | 常駐モデル上限（超過は LRU でアンロード） |
