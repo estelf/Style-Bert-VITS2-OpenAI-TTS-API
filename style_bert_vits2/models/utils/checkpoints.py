@@ -1,0 +1,262 @@
+import glob
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+import torch
+
+from style_bert_vits2.logging import logger
+
+# チェックポイントとモデルの不一致キー（欠損・形状不一致）がこの件数を超えたら停止する
+# （少数の不一致は旧バージョン互換の再初期化で許容するが、話者数ミス設定のような大規模な不一致は黙って通さない）
+MAX_MISMATCHED_KEYS = 8
+
+
+def load_checkpoint(
+    checkpoint_path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    skip_optimizer: bool = False,
+    for_infer: bool = False,
+    device: str | torch.device = "cpu",
+) -> tuple[torch.nn.Module, torch.optim.Optimizer | None, float, int]:
+    """
+    指定されたパスからチェックポイントを読み込み、モデルとオプティマイザーを更新する。
+
+    Args:
+        checkpoint_path (Union[str, Path]): チェックポイントファイルのパス
+        model (torch.nn.Module): 更新するモデル
+        optimizer (Optional[torch.optim.Optimizer]): 更新するオプティマイザー。None の場合は更新しない
+        skip_optimizer (bool): オプティマイザーの更新をスキップするかどうかのフラグ
+        for_infer (bool): 推論用に読み込むかどうかのフラグ
+
+    Returns:
+        tuple[torch.nn.Module, Optional[torch.optim.Optimizer], float, int]: 更新されたモデルとオプティマイザー、学習率、イテレーション回数
+
+    Raises:
+        ValueError: 欠損キー・形状不一致キーが MAX_MISMATCHED_KEYS 件を超えた場合、
+            または話者埋め込み（emb_g.*）がチェックポイントと一致しない場合（再初期化は不可）
+    """
+
+    assert os.path.isfile(checkpoint_path)
+    # チェックポイントは self-contained な構造（model/optimizer状態のみ）なので明示的に指定する
+    # （torch 2.6+ でデフォルトが True に変更済み。バージョンに依存せず挙動を固定する）
+    checkpoint_dict = torch.load(
+        checkpoint_path, map_location=device, weights_only=True
+    )
+    iteration = checkpoint_dict["iteration"]
+    learning_rate = checkpoint_dict["learning_rate"]
+    logger.info(
+        f"Loading model and optimizer at iteration {iteration} from {checkpoint_path}"
+    )
+    if (
+        optimizer is not None
+        and not skip_optimizer
+        and checkpoint_dict["optimizer"] is not None
+    ):
+        optimizer.load_state_dict(checkpoint_dict["optimizer"])
+
+    saved_state_dict = checkpoint_dict["model"]
+    if hasattr(model, "module"):
+        state_dict = model.module.state_dict()
+    else:
+        state_dict = model.state_dict()
+
+    new_state_dict = {}
+    # 形状不一致・キー欠落を握り潰さず集計する（例: 話者数を変えて再開すると emb_g だけが黙って再初期化される）
+    mismatched_keys: list[str] = []
+    for k, v in state_dict.items():
+        if k not in saved_state_dict:
+            # For upgrading from the old version
+            if "enc_q" in k and for_infer:
+                continue
+            mismatched_keys.append(k)
+            logger.error(f"{k} is not in the checkpoint {checkpoint_path}")
+            new_state_dict[k] = v
+            continue
+        if saved_state_dict[k].shape == v.shape:
+            new_state_dict[k] = saved_state_dict[k]
+        elif "ja_bert_proj" in k:
+            # For upgrading from the old version
+            v = torch.zeros_like(v)
+            logger.warning(
+                f"Seems you are using the old version of the model, the {k} is automatically set to zero for backward compatibility"
+            )
+            new_state_dict[k] = v
+        else:
+            mismatched_keys.append(k)
+            logger.error(
+                f"Shape mismatch for {k}: checkpoint {tuple(saved_state_dict[k].shape)} != model {tuple(v.shape)}. It will be re-initialized."
+            )
+            new_state_dict[k] = v
+
+    if len(mismatched_keys) > MAX_MISMATCHED_KEYS:
+        raise ValueError(
+            f"{len(mismatched_keys)} keys are missing or shape-mismatched in {checkpoint_path} "
+            f"(threshold {MAX_MISMATCHED_KEYS}, e.g.: {mismatched_keys[:5]}). "
+            "The checkpoint does not match the current model configuration. Please check config.json (n_speakers etc.)."
+        )
+    elif mismatched_keys:
+        # 話者埋め込み（emb_g）の不一致だけは件数に関係なく必ず停止する。1キーだけと
+        # MAX_MISMATCHED_KEYS(8) を軽く通過して黙って再初期化されると、既存話者の埋め込みが
+        # ランダム値になり、学習も推論もその話者だけ別人音声になることに誰も気づかない
+        # （話者追加で再開する場合は config.json の n_speakers / spk2id の更新が必須）
+        emb_g_mismatch = [k for k in mismatched_keys if k.startswith("emb_g.")]
+        if emb_g_mismatch:
+            raise ValueError(
+                f"話者埋め込み {emb_g_mismatch} がチェックポイントと一致しません ({checkpoint_path})。"
+                "config.json の data.n_speakers / data.spk2id を既存チェックポイントと話者構成が"
+                "合っているか確認してください。話者を追加して学習を再開する場合は、追加後の話者IDに"
+                "合わせたチェックポイントが必要です（新規モデル名で学習するか、"
+                "意図的に話者埋め込みを再初期化する場合は checkpoints.py のこのガードを"
+                "一時的に外す必要があります）"
+            )
+        logger.warning(
+            f"{len(mismatched_keys)} keys were missing or shape-mismatched and re-initialized from {checkpoint_path}: {mismatched_keys}"
+        )
+
+    if hasattr(model, "module"):
+        model.module.load_state_dict(new_state_dict, strict=False)
+    else:
+        model.load_state_dict(new_state_dict, strict=False)
+
+    logger.info(f"Loaded '{checkpoint_path}' (iteration {iteration})")
+
+    return model, optimizer, learning_rate, iteration
+
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | torch.optim.AdamW,
+    learning_rate: float,
+    iteration: int,
+    checkpoint_path: str | Path,
+) -> None:
+    """
+    モデルとオプティマイザーの状態を指定されたパスに保存する。
+
+    Args:
+        model (torch.nn.Module): 保存するモデル
+        optimizer (Union[torch.optim.Optimizer, torch.optim.AdamW]): 保存するオプティマイザー
+        learning_rate (float): 学習率
+        iteration (int): イテレーション回数
+        checkpoint_path (Union[str, Path]): 保存先のパス
+    """
+    logger.info(
+        f"Saving model and optimizer state at iteration {iteration} to {checkpoint_path}"
+    )
+    if hasattr(model, "module"):
+        state_dict = model.module.state_dict()
+    else:
+        state_dict = model.state_dict()
+    # 原子的保存: 同一ディレクトリ内の一時ファイルへ書いてから os.replace する。
+    # 途中クラッシュで壊れた .pth が最新の再開状態を黙って潰すと、次回再開時に
+    # 読み込み失敗 → （--allow_scratch 無効なら）学習不能になる。rename はアトミック
+    # なので、既存チェックポイントは必ず前回の正常な状態に保たれる
+    tmp_path = f"{checkpoint_path}.tmp{os.getpid()}"
+    try:
+        torch.save(
+            {
+                "model": state_dict,
+                "iteration": iteration,
+                "optimizer": optimizer.state_dict(),
+                "learning_rate": learning_rate,
+            },
+            tmp_path,
+        )
+        os.replace(tmp_path, checkpoint_path)
+    except BaseException:
+        # 書き込み失敗時は一時ファイルを残さない（学習本番の disk 障害でゴミが溜まるのを防ぐ）
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def clean_checkpoints(
+    model_dir_path: str | Path = "logs/44k/",
+    n_ckpts_to_keep: int = 2,
+    sort_by_time: bool = True,
+) -> None:
+    """
+    指定されたディレクトリから古いチェックポイントを削除して空き容量を確保する
+
+    Args:
+        model_dir_path (Union[str, Path]): モデルが保存されているディレクトリのパス
+        n_ckpts_to_keep (int): 保持するチェックポイントの数（G_0.pth と D_0.pth を除く）
+        sort_by_time (bool): True の場合、時間順に削除。False の場合、名前順に削除
+    """
+
+    ckpts_files = [
+        f
+        for f in os.listdir(model_dir_path)
+        if os.path.isfile(os.path.join(model_dir_path, f))
+    ]
+
+    def name_key(_f: str) -> int:
+        # .pth と .safetensors の両方に対応（sort_by_time=False で名前順を使う場合に落ちないよう、
+        # 数字を含まないファイルは先頭（最も古い扱い）に寄せる）
+        match = re.search(r"_(\d+)\.(pth|safetensors)$", _f)
+        return int(match.group(1)) if match else -1
+
+    def time_key(_f: str) -> float:
+        return os.path.getmtime(os.path.join(model_dir_path, _f))
+
+    sort_key = time_key if sort_by_time else name_key
+
+    def x_sorted(_x: str) -> list[str]:
+        # 事前学習ベース（G_0.pth / G_0.safetensors 等）は絶対に削除しない。
+        # 本フォークの事前学習モデルは .safetensors なので、.pth だけ除外していたと
+        # keep_ckpts 回の保存で黙って削除され、再開時にランダム初期化で学習が再開されていた
+        return sorted(
+            [
+                f
+                for f in ckpts_files
+                if f.startswith(_x)
+                and not f.endswith("_0.pth")
+                and not f.endswith("_0.safetensors")
+            ],
+            key=sort_key,
+        )
+
+    to_del = [
+        os.path.join(model_dir_path, fn)
+        for fn in (
+            x_sorted("G_")[:-n_ckpts_to_keep]
+            + x_sorted("D_")[:-n_ckpts_to_keep]
+            + x_sorted("WD_")[:-n_ckpts_to_keep]
+            + x_sorted("DUR_")[:-n_ckpts_to_keep]
+        )
+    ]
+
+    def del_info(fn: str) -> None:
+        return logger.info(f"Free up space by deleting ckpt {fn}")
+
+    def del_routine(x: str) -> list[Any]:
+        return [os.remove(x), del_info(x)]
+
+    [del_routine(fn) for fn in to_del]
+
+
+def get_latest_checkpoint_path(
+    model_dir_path: str | Path, regex: str = "G_*.pth"
+) -> str:
+    """
+    指定されたディレクトリから最新のチェックポイントのパスを取得する
+
+    Args:
+        model_dir_path (Union[str, Path]): モデルが保存されているディレクトリのパス
+        regex (str): チェックポイントのファイル名の正規表現
+
+    Returns:
+        str: 最新のチェックポイントのパス
+    """
+
+    f_list = glob.glob(os.path.join(str(model_dir_path), regex))
+    f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
+    try:
+        x = f_list[-1]
+    except IndexError:
+        raise ValueError(f"No checkpoint found in {model_dir_path} with regex {regex}")
+
+    return x

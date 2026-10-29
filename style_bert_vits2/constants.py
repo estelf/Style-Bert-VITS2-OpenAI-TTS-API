@@ -1,0 +1,100 @@
+import os
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from pathlib import Path
+
+from style_bert_vits2.utils.strenum import StrEnum
+
+# Style-Bert-VITS2 のバージョン（インストール済みパッケージのメタデータ = pyproject.toml の [project].version から取得する）
+# [本リポジトリのベンダー同梱パッチ] 上流は独立パッケージ `style-bert-vits2` としてインストールされる前提だが、
+# 当リポジトリではサーバー本体と単一分布に同梱するため `style-bert-vits2` というメタデータは存在しない。
+# 解決できない場合は VENDORED.md のベースコミットに一致する固定値へフォールバックする（コア内部で VERSION は参照されない）。
+try:
+    VERSION = _pkg_version("style-bert-vits2")
+except PackageNotFoundError:
+    VERSION = "2.7.0-vendored+aae2d62"
+
+# Style-Bert-VITS2 のベースディレクトリ
+BASE_DIR = Path(__file__).parent.parent
+
+# 学習データセットのルート（{DATASET_ROOT}/{model_name} に esd.list + raw.zip を置く）
+## 環境変数 SBV2_DATASET_ROOT で差し替え可能（回帰テストは tests/data を使う。サブプロセスも同じ環境変数を継承する）
+DATASET_ROOT = Path(os.environ.get("SBV2_DATASET_ROOT", str(BASE_DIR / "Data")))
+
+# 学習済みモデル資産のルート（学習時は {ASSETS_ROOT}/{model_name} に保存し、推論時はここから読み込む）
+## 環境変数 SBV2_ASSETS_ROOT で差し替え可能（回帰テストは tests/model_assets を使い、ユーザーの実モデルを絶対に触らない）
+ASSETS_ROOT = Path(os.environ.get("SBV2_ASSETS_ROOT", str(BASE_DIR / "model_assets")))
+
+# 事前学習済みモデル（BERT・SLM・JP-Extra・話者埋め込み）の置き場所
+## ここへの取得は style_bert_vits2.pretrained.ensure_pretrained() が担う（git には含まれない、全てダウンロード成果物）
+## 環境変数 SBV2_PRETRAINED_ROOT で差し替え可能（テストは一時ディレクトリを使う）
+PRETRAINED_ROOT = Path(
+    os.environ.get("SBV2_PRETRAINED_ROOT", str(BASE_DIR / "pretrained"))
+)
+
+# 自動ダウンロードの抑止（CI・オフライン・ミラー環境用）
+## 有効な状態で未取得のモデルが必要になると PretrainedModelMissing で停止する（黙って通信しない）
+SKIP_PRETRAINED_DOWNLOAD = os.environ.get(
+    "SBV2_SKIP_PRETRAINED_DOWNLOAD", ""
+).strip().lower() in ("1", "true", "yes", "on")
+
+# 学習時の分散環境変数のデフォルト（環境変数が未設定の場合に pipeline が使用。上書きしたい場合は環境変数を直接指定）
+TRAIN_ENV_DEFAULTS = {
+    "MASTER_ADDR": "::1",  # IPv6ループバック（WSL2 mirrored mode でも確実にbind/connectできるため localhost でなくリテラル指定。IPv6 自体が使えない環境では train/pipeline.py が 127.0.0.1 へフォールバックする）
+    "MASTER_PORT": "10086",  # 参考上の既定値。実際には train/pipeline.py が未設定時に空きポートへ差し替える（同時実行する2本目の衝突回避。torchrun 経由ならランチャー側の指定を尊重）
+    "WORLD_SIZE": "1",
+    "RANK": "0",
+    "LOCAL_RANK": "0",
+}
+
+# 学習バッチサンプラー（train/data_utils.py の DistributedBucketSampler）のバケット境界 [spec フレーム数]。
+# 保持されるのは MIN_SPEC_FRAMES < フレーム数 <= MAX_SPEC_FRAMES の音声だけで、境界外は学習時に黙って破棄される。
+# この1箇所だけを正とし、以下が同じ値を参照する:
+# - train/pipeline.py: サンプラーへ渡す（内部で pop されるので必ずコピーを渡すこと）と評価データの除外
+# - preprocess/check_dataset.py: 前処理段階での範囲外警告
+MIN_SPEC_FRAMES = 32  # 約0.37秒未満は除外
+MAX_SPEC_FRAMES = 1000  # 約11.6秒超は除外
+BUCKET_BOUNDARIES = [
+    MIN_SPEC_FRAMES,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900,
+    MAX_SPEC_FRAMES,
+]
+
+
+# 利用可能な言語
+## 本リポジトリは日本語のみに対応する（英語はカタカナ入力が前提。ローマ字のままの英単語は pyopenjtalk に1文字ずつ読まれるため、ユーザー辞書で吸収するかカタカナで書く運用とする）
+class Languages(StrEnum):
+    JP = "JP"
+
+
+# 日本語 BERT モデルのデフォルトパス（style_bert_vits2.pretrained の "bert" エントリと一致させる。
+## tests/test_pretrained.py が一致を検証する）
+DEFAULT_BERT_MODEL_PATH = (
+    PRETRAINED_ROOT / "bert" / "deberta-v2-large-japanese-char-wwm"
+)
+
+# デフォルトのユーザー辞書ディレクトリ
+## style_bert_vits2.nlp.japanese.user_dict モジュールのデフォルト値として利用される
+## ライブラリとしての利用などで外部のユーザー辞書を指定したい場合は、user_dict 以下の各関数の実行時、引数に辞書データファイルのパスを指定する
+DEFAULT_USER_DICT_DIR = BASE_DIR / "dict_data"
+
+# デフォルトの推論パラメータ
+DEFAULT_STYLE = "Neutral"
+DEFAULT_STYLE_WEIGHT = 1.0
+DEFAULT_SDP_RATIO = 0.2
+DEFAULT_NOISE = 0.6
+DEFAULT_NOISEW = 0.8
+DEFAULT_LENGTH = 1.0
+DEFAULT_LINE_SPLIT = True
+DEFAULT_SPLIT_INTERVAL = 0.5
+DEFAULT_ASSIST_TEXT_WEIGHT = 1.0
+
+# Gradio のテーマ
+## Built-in theme: "default", "base", "monochrome", "soft", "glass"
+## See https://huggingface.co/spaces/gradio/theme-gallery for more themes
+GRADIO_THEME = "glass"

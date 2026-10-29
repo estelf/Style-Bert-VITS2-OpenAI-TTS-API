@@ -1,0 +1,71 @@
+[project]
+name = "style-bert-vits2-openai-tts-api"
+version = "0.1.0"
+description = "OpenAI TTS API compatible voice synthesis server built on the vendored Style-Bert-VITS2 core"
+readme = "README.md"
+authors = [
+    { name = "estelf", email = "raisin2468@gmail.com" }
+]
+requires-python = ">=3.13"
+license = "AGPL-3.0-or-later"
+dependencies = [
+    # --- Style-Bert-VITS2 コア（style_bert_vits2/ を本リポジトリに同梱。推論パスの精査済み最小セット） ---
+    # accelerate は直接 import しないが、transformers の from_pretrained(device_map=...)
+    # （bert_models.load_model 経由の BERT ロード）が実行時に必須とするため必要
+    "accelerate",
+    # style_bert_vits2/pretrained.py の事前学習モデル取得（snapshot_download）に必要
+    "huggingface-hub",
+    "loguru",
+    # monotonic_alignment（MAS）が使用
+    "numba",
+    # nlp/japanese/normalizer.py が使用
+    "num2words",
+    "numpy>=2",
+    "pydantic>=2.0",
+    # pyopenjtalk のドロップイン代替。onnxruntime は「何」読み推定用、tsqyomi は同形異音語の文脈読み選択用
+    "pyopenjtalk-plus[onnxruntime,tsqyomi]",
+    # voice.py（pitch_scale / intonation_scale 調整）が使用
+    "pyworld-prebuilt",
+    "safetensors",
+    "soundfile",
+    "torch>=2.4",
+    "transformers",
+    # --- サーバー本体 ---
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings>=2.0",
+    # 学習・前処理専用（librosa / torchaudio / tensorboard / tqdm 等）と参照音声用の
+    # pyannote.audio（speaker.py は遅延 import のため本サーバーでは不要）は意図的に非依存
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[project.scripts]
+style-bert-vits2-openai-tts-api = "style_bert_vits2_openai_tts_api:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# フラットレイアウトで同梱コア（style_bert_vits2/）とサーバー本体の2パッケージを1つのホイールに同梱する。
+# style_bert_vits2 の constants.BASE_DIR（Path(__file__).parent.parent）はリポジトリルートになり、
+# ASSETS_ROOT（既定 ./model_assets）・PRETRAINED_ROOT（既定 ./pretrained）・
+# DEFAULT_USER_DICT_DIR（既定 ./dict_data）がすべて本リポジトリ内のパスに解決される
+module-root = ""
+module-name = ["style_bert_vits2", "style_bert_vits2_openai_tts_api"]
+source-include = [
+    "dict_data/default.csv",
+    "LICENSE",
+    "LGPL_LICENSE",
+    "VENDORED.md",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "gpu: 実モデルと GPU を使う統合テスト（モデル不在時は自動で skip）",
+]

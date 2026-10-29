@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# 学習済みモデル資産（ユーザーが配置する。git には入れない）
+/model_assets/
+
+# 事前学習済みモデル（style_bert_vits2.pretrained のダウンロード成果物。全て HF からの取得物で git 管理外）
+/pretrained/
+
+# 学習データセット（本サーバーでは使わないが念のため）
+/Data/
+
+# pytest / uv
+.pytest_cache/
+uv.lock.bak
+
+# テスト用フィクスチャ（tests/conftest.py が生成する偽アセット。ネットワーク不要テスト用）
+/tests/fixtures/
