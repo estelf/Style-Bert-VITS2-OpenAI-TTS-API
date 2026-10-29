@@ -20,7 +20,7 @@ from .settings import Settings
 
 ASSETS_SETUP_HELP = (
     "model_assets/ に有効な合成モデルが見つかりません。学習済みモデルを "
-    "<assets_root>/<モデル名>/ 直下に次の構成で配置してください（例: model_assets/hikaru/ ...）。 "
+    "<assets_root>/<モデル名>/ 直下に次の構成で配置してください（例: model_assets/my-model/ ...）。 "
     "配置先は環境変数 SBV2_ASSETS_ROOT で変更できます。\n"
     "  <モデル名>/\n"
     "    config.json\n"

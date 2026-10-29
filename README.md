@@ -29,7 +29,7 @@ uv sync          # 依存インストール（torch のため初回は容量が�
 
 ```
 model_assets/
-└── hikaru/
+└── my-model/
     ├── config.json
     ├── best.safetensors        ← あれば優先。無ければ更新日時最新の .safetensors
     └── style_vectors.npy
@@ -85,9 +85,9 @@ uv run style-bert-vits2-openai-tts-api
 
 ```json
 {
-  "model": "hikaru",
+  "model": "my-model",
   "input": "こんにちは、はじめまして。",
-  "voice": "hikaru",
+  "voice": "my-model",
   "response_format": "flac",
   "speed": 1.0
 }
@@ -107,7 +107,7 @@ curl:
 ```bash
 curl -s http://127.0.0.1:8000/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"hikaru","input":"こんにちは、はじめまして。","voice":"hikaru"}' \
+  -d '{"model":"my-model","input":"こんにちは、はじめまして。","voice":"my-model"}' \
   --output speech.flac
 ```
 
@@ -118,8 +118,8 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")  # 認証なしなので api_key は無視されます
 with client.audio.speech.with_streaming_response.create(
-    model="hikaru",
-    voice="hikaru",
+    model="my-model",
+    voice="my-model",
     input="こんにちは、はじめまして。",
     response_format="flac",
 ) as response:
