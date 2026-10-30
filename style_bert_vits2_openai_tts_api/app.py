@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.concurrency import run_in_threadpool
@@ -28,6 +29,7 @@ from style_bert_vits2.nlp import bert_models
 from style_bert_vits2.nlp.japanese import pyopenjtalk_worker as pyopenjtalk
 
 from .audio import MEDIA_TYPES, encode_flac
+from .breath import split_breath
 from .model_manager import (
     ModelNotFound,
     ModelRegistry,
@@ -264,10 +266,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if value is not None:
                 infer_kwargs[key] = value
 
+        # 記号・空白位置に「一呼吸」、文末シンボル直後に文切れの固定無音を挿入する。
+        # シンボル一覧・無音長ともに文末級／非文末級の 2 グループを別々に設定できる
+        # （BREATH_SYMBOLS/BREATH_INTERVAL, SENTENCE_SYMBOLS/SENTENCE_INTERVAL）。
+        # 無音長が 2 種類あるため line_split 機構（単一间隔）は使わず、
+        # セグメントごとに合成して numpy 配列を境界種別ごとの無音で連結する。
+        # 分割結果が 1 セグメントのみ（区切りが無いか両方 0 で無効）なら従来どおり 1 回で合成する。
+        breath_interval = (
+            req.breath_interval
+            if req.breath_interval is not None
+            else settings.breath_interval
+        )
+        sentence_interval = (
+            req.sentence_interval
+            if req.sentence_interval is not None
+            else settings.sentence_interval
+        )
+        segments = split_breath(
+            req.input,
+            with_breath=breath_interval > 0,
+            with_sentence=sentence_interval > 0,
+            breath_symbols=settings.breath_symbols,
+            sentence_symbols=settings.sentence_symbols,
+        )
+
+        # 生成音声の末尾に固定の無音を付ける。一呼吸／文末区切りとは別枠で、
+        # 連続生成を再生したときに音が詰まるのを防ぐためのもの
+        # （環境変数 TAIL_SILENCE / リクエスト tail_silence、0 で無効）
+        tail_silence = (
+            req.tail_silence if req.tail_silence is not None else settings.tail_silence
+        )
+
         def synthesize() -> tuple[int, Any]:
             with registry.synthesis_lock:
                 model = registry.ensure_loaded(req.model)
-                return model.infer(**infer_kwargs)
+                if not segments:
+                    sample_rate, audio = model.infer(**infer_kwargs)
+                else:
+                    audios: list[Any] = []
+                    sample_rate = 0
+                    for segment in segments:
+                        sample_rate, audio = model.infer(
+                            **{**infer_kwargs, "text": segment.text}
+                        )
+                        audio = np.asarray(audio)
+                        audios.append(audio)
+                        gap = {"breath": breath_interval, "sentence": sentence_interval}.get(
+                            segment.boundary, 0.0
+                        )
+                        if gap > 0:
+                            audios.append(
+                                np.zeros(int(gap * sample_rate), dtype=audio.dtype)
+                            )
+                    audio = np.concatenate(audios)
+            if tail_silence > 0:
+                audio = np.asarray(audio)
+                audio = np.concatenate(
+                    [audio, np.zeros(int(tail_silence * sample_rate), dtype=audio.dtype)]
+                )
+            return sample_rate, audio
 
         try:
             sample_rate, audio = await run_in_threadpool(synthesize)

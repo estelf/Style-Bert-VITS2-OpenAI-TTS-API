@@ -79,6 +79,11 @@ uv run style-bert-vits2-openai-tts-api --host 0.0.0.0 --port 8000
 | `MAX_RESIDENT_MODELS` | `2` | 常駐モデル上限（超過は LRU でアンロード） |
 | `PRELOAD_MODELS` | （空） | 起動時に先読みロードするモデル名（カンマ区切り） |
 | `WARMUP_SYNTH` | `0` | 起動時に 1 文字だけ実合成して暖気 |
+| `BREATH_INTERVAL` | `0.4` | 非文末級（一呼吸）の無音秒数。0 で無効化 |
+| `SENTENCE_INTERVAL` | `0.8` | 文末級の無音秒数。一呼吸とは別枠。0 で無効化 |
+| `BREATH_SYMBOLS` | 括弧・区切り記号類 | 一呼吸の対象シンボル（`（）「」#／\|＋` 等）。空白類は常に含まれる |
+| `SENTENCE_SYMBOLS` | `。` | 文末級の対象シンボル（例: `。？` なら「。」と「？」の直後が文末級の無音） |
+| `TAIL_SILENCE` | `0.3` | 生成音声の**末尾**に付ける無音秒数（連続生成時の詰まり防止。0 で無効化） |
 | `SBV2_ASSETS_ROOT` | `./model_assets` | モデル資産ルート（コア共通） |
 | `SBV2_PRETRAINED_ROOT` | `./pretrained` | 事前学習モデル置き場（コア共通） |
 | `SBV2_SKIP_PRETRAINED_DOWNLOAD` | （オフ） | 自動ダウンロード抑止（コア共通） |
@@ -105,7 +110,24 @@ uv run style-bert-vits2-openai-tts-api --host 0.0.0.0 --port 8000
 - `response_format`: **`flac` のみ**（省略時既定）。mp3 等は 400 を返します
 - `speed`: 0.25〜4.0（OpenAI と同じく大きいほど早い。内部では length=1/speed）
 - 拡張フィールド（任意・省略可）: `sdp_ratio` / `noise` / `noise_w` / `pitch_scale` /
-  `intonation_scale` / `line_split`（既定 false）/ `split_interval`
+  `intonation_scale` / `line_split`（既定 false）/ `split_interval` / `breath_interval` /
+  `sentence_interval` / `tail_silence`
+- **末尾無音**: 生成音声の末尾に固定の無音（既定 0.3 秒）を付けます。複数の生成音を
+  連続で再生したときに音が詰まるのを防ぐためのもので、一呼吸／文末区切りとは別枠です。
+  長さは `tail_silence`（秒、0 で無効化）または環境変数 `TAIL_SILENCE` で調整します
+- **一呼吸・文末区切り**: 区切りは**文末級／非文末級（一呼吸）の 2 グループ**で、
+  それぞれ対象シンボルと無音秒数を `.env`・環境変数で設定します
+  （秒数のみリクエスト `breath_interval` / `sentence_interval` で上書き可、0 で無効化）
+  - **文末級**（既定 `SENTENCE_SYMBOLS=。` / `SENTENCE_INTERVAL=0.8`）: 「。」等の文末
+    シンボルの直後で区切ります。例: `SENTENCE_SYMBOLS=。？` と `SENTENCE_INTERVAL=0.6`
+    なら「。」と「？」の直後に 0.6 秒。シンボル自体は読まれたまま、モデル自身の文末
+    ポーズ・下降調の上に固定無音が加算されます
+  - **非文末級**（既定 `BREATH_SYMBOLS` は括弧・区切り記号類 / `BREATH_INTERVAL=0.4`）:
+    空白全般（半角・全角・改行等。**設定に関わらず常に対象**）と指定シンボルの位置で
+    区切ります。シンボルは発話から除かれます（正規化で消える文字が既定）
+  - 同じシンボルを両方に指定した場合は無音長が文末級優先。`、` `？` 等はモデル自身が
+    ポーズを入れるため既定では文末級対象外です。発音される記号（`$`「ドル」等）や長音
+    `ー` `～` をグループに入れると不自然な位置で切れるのでご注意ください
 - `stream` などの未知フィールドは無視されます。スタイル（`style` / `instructions`）は非対応
 - 成功時 `audio/flac` のバイナリ、エラーは OpenAI 形式の JSON（`{"error": {...}}`）
 

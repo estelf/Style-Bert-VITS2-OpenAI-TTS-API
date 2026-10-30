@@ -137,6 +137,121 @@ def test_speech_speed_out_of_range_400(client: TestClient) -> None:
     assert r.json()["error"]["param"] == "speed"
 
 
+def test_speech_request_breath_interval() -> None:
+    from pydantic import ValidationError
+
+    from style_bert_vits2_openai_tts_api.schemas import SpeechRequest
+
+    base = {"model": "m", "input": "あ"}
+    assert SpeechRequest.model_validate(base).breath_interval is None
+    assert SpeechRequest.model_validate({**base, "breath_interval": 0.0}).breath_interval == 0.0
+    assert SpeechRequest.model_validate({**base, "breath_interval": 0.3}).breath_interval == 0.3
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "breath_interval": -0.1})
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "breath_interval": 10.5})
+
+
+def test_speech_breath_interval_out_of_range_400(client: TestClient) -> None:
+    r = client.post("/v1/audio/speech", json=_payload(breath_interval=10.5))
+    assert r.status_code == 400
+    assert r.json()["error"]["param"] == "breath_interval"
+
+
+def test_speech_breath_interval_ok(client: TestClient) -> None:
+    # 偽モデル合成のため 500 になり得るが、breath_interval による検証エラー・NotFound にはならない
+    r = client.post(
+        "/v1/audio/speech",
+        json=_payload(input="これは テスト です", breath_interval=0.3),
+    )
+    assert r.status_code not in (400, 404)
+
+
+def test_speech_request_sentence_interval() -> None:
+    from pydantic import ValidationError
+
+    from style_bert_vits2_openai_tts_api.schemas import SpeechRequest
+
+    base = {"model": "m", "input": "あ"}
+    assert SpeechRequest.model_validate(base).sentence_interval is None
+    assert (
+        SpeechRequest.model_validate({**base, "sentence_interval": 0.0}).sentence_interval == 0.0
+    )
+    assert (
+        SpeechRequest.model_validate({**base, "sentence_interval": 0.8}).sentence_interval == 0.8
+    )
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "sentence_interval": -0.1})
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "sentence_interval": 10.5})
+
+
+def test_speech_sentence_interval_out_of_range_400(client: TestClient) -> None:
+    r = client.post("/v1/audio/speech", json=_payload(sentence_interval=10.5))
+    assert r.status_code == 400
+    assert r.json()["error"]["param"] == "sentence_interval"
+
+
+def test_speech_sentence_interval_ok(client: TestClient) -> None:
+    r = client.post(
+        "/v1/audio/speech",
+        json=_payload(input="天気です。外出します", sentence_interval=0.6),
+    )
+    assert r.status_code not in (400, 404)
+
+
+def test_speech_request_tail_silence() -> None:
+    from pydantic import ValidationError
+
+    from style_bert_vits2_openai_tts_api.schemas import SpeechRequest
+
+    base = {"model": "m", "input": "あ"}
+    assert SpeechRequest.model_validate(base).tail_silence is None
+    assert SpeechRequest.model_validate({**base, "tail_silence": 0.0}).tail_silence == 0.0
+    assert SpeechRequest.model_validate({**base, "tail_silence": 0.5}).tail_silence == 0.5
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "tail_silence": -0.1})
+    with pytest.raises(ValidationError):
+        SpeechRequest.model_validate({**base, "tail_silence": 10.5})
+
+
+def test_speech_tail_silence_out_of_range_400(client: TestClient) -> None:
+    r = client.post("/v1/audio/speech", json=_payload(tail_silence=10.5))
+    assert r.status_code == 400
+    assert r.json()["error"]["param"] == "tail_silence"
+
+
+def test_speech_tail_silence_ok(client: TestClient) -> None:
+    r = client.post("/v1/audio/speech", json=_payload(tail_silence=0.5))
+    assert r.status_code not in (400, 404)
+
+
+# --- 記号グループ設定（BREATH_SYMBOLS / SENTENCE_SYMBOLS） ---
+
+
+def test_symbol_settings_defaults() -> None:
+    from style_bert_vits2_openai_tts_api.breath import (
+        DEFAULT_BREATH_SYMBOLS,
+        DEFAULT_SENTENCE_SYMBOLS,
+    )
+    from style_bert_vits2_openai_tts_api.settings import Settings
+
+    # 実 .env を読まず、環境変数のみで解決させる
+    s = Settings(_env_file=None)
+    assert s.breath_symbols == DEFAULT_BREATH_SYMBOLS
+    assert s.sentence_symbols == DEFAULT_SENTENCE_SYMBOLS
+
+
+def test_symbol_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from style_bert_vits2_openai_tts_api.settings import Settings
+
+    monkeypatch.setenv("SENTENCE_SYMBOLS", "。？")
+    monkeypatch.setenv("BREATH_SYMBOLS", "・※")
+    s = Settings(_env_file=None)
+    assert s.sentence_symbols == "。？"
+    assert s.breath_symbols == "・※"
+
+
 def test_speech_missing_field_400(client: TestClient) -> None:
     r = client.post("/v1/audio/speech", json={"model": "fake", "voice": "fake"})
     assert r.status_code == 400
