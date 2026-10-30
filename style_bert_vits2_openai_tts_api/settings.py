@@ -43,11 +43,11 @@ class Settings(BaseSettings):
 
     #: 記号・空白位置に挿入する「一呼吸」の無音長（秒）。リクエストの
     #: `breath_interval` で上書き可（0 で無効化）
-    breath_interval: float = 0.4
+    breath_interval: float = 0.1
 
     #: 「。」等の文末シンボルの直後に挿入する無音長（秒）。一呼吸とは別枠。
     #: リクエストの `sentence_interval` で上書き可（0 で無効化）
-    sentence_interval: float = 0.8
+    sentence_interval: float = 0.3
 
     #: 非文末級（一呼吸）の対象シンボル一覧。空白類（半角・全角・改行等）は
     #: ここに書かなくても常に対象。対象から外すものは空にする等の設計ではない
