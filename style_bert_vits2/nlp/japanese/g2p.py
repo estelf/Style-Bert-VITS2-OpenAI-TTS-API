@@ -637,6 +637,10 @@ def __kata_to_phoneme_list(text: str) -> list[str]:
     return spaced_phonemes.strip().split(" ")
 
 
+#: __align_tones() が音素列の不一致から復旧するために phone_tone_list 側を先読みする最大長
+__ALIGN_TONES_LOOKAHEAD = 4
+
+
 def __align_tones(
     phones_with_punct: list[str], phone_tone_list: list[tuple[str, int]]
 ) -> list[tuple[str, int]]:
@@ -655,11 +659,16 @@ def __align_tones(
 
     Returns:
         list[tuple[str, int]]: punctuation を含む音素とアクセントのペアのリスト
+
+    Note:
+        二つの音素列が一致しない箇所があっても例外は送出せず、先読みによる再同期または
+        tone 0 の暫定代入で復旧する（合成を継続するために多少アクセントが不正確になる可能性がある）。
     """
 
     result: list[tuple[str, int]] = []
     tone_index = 0
-    for phone in phones_with_punct:
+    num_mismatches = 0
+    for phone_position, phone in enumerate(phones_with_punct):
         if tone_index >= len(phone_tone_list):
             # 余った punctuation がある場合 → (punctuation, 0) を追加
             result.append((phone, 0))
@@ -672,12 +681,48 @@ def __align_tones(
             # phone が punctuation の場合 → (phone, 0) を追加
             result.append((phone, 0))
         else:
-            logger.debug(f"phones: {phones_with_punct}")
-            logger.debug(f"phone_tone_list: {phone_tone_list}")
-            logger.debug(f"result: {result}")
-            logger.debug(f"tone_index: {tone_index}")
-            logger.debug(f"phone: {phone}")
-            raise ValueError(f"Unexpected phone: {phone}")
+            # 二つの音素列がこの位置で一致しない。
+            # 例：
+            # - 数字に挟まれた `.` が open_jtalk のフルコンテキスト側で小数点「テン」と解釈され、
+            #   punctuation 側の `.` 1 音素に対して `t e N` の 3 音素が余分に現れる
+            #   （`3. 1対1` → 正規化後 `三.一対一` → 「サンテンイチ」と読まれる 等）
+            # - pyopenjtalk の長音「ー」や語末の促音「っ」の処理の差異
+            # 従来はここで ValueError を送出し合成全体を失敗させていたが、読み上げエンジンとしては
+            # 多少アクセントが不正確になっても読み進めるほうが望ましい。
+            # よって phone_tone_list 側を少し先読みして再同期できる位置を探し、
+            # phones_with_punct 側に無い音素（上記の「テン」等）を飛ばして復旧する。
+            # 再同期できない場合（phone_tone_list 側にこの音素自体が無い場合）は tone 0 を暫定代入する。
+            resync_index = next(
+                (
+                    j
+                    for j in range(
+                        tone_index + 1,
+                        min(
+                            tone_index + 1 + __ALIGN_TONES_LOOKAHEAD,
+                            len(phone_tone_list),
+                        ),
+                    )
+                    if phone_tone_list[j][0] == phone
+                ),
+                None,
+            )
+            num_mismatches += 1
+            logger.debug(
+                f"Phone sequence mismatch at {phone_position}: phone={phone!r}, "
+                f"tone_index={tone_index}, tone_here={phone_tone_list[tone_index]}, "
+                f"resync_index={resync_index}"
+            )
+            if resync_index is not None:
+                result.append((phone, phone_tone_list[resync_index][1]))
+                tone_index = resync_index + 1
+            else:
+                result.append((phone, 0))
+
+    if num_mismatches:
+        logger.warning(
+            f"Recovered from {num_mismatches} phone sequence mismatch(es) while aligning "
+            f"tones; some accents may be inaccurate"
+        )
 
     return result
 

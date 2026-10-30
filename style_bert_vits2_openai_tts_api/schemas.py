@@ -49,6 +49,27 @@ class SpeechRequest(BaseModel):
     intonation_scale: float | None = None
     line_split: bool | None = None
     split_interval: float | None = None
+    breath_interval: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="記号・空白位置に挿入する一呼吸（無音）の秒数。"
+        "省略時はサーバー既定 BREATH_INTERVAL。0 で無効化",
+    )
+    sentence_interval: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="「。」の直後（文切れ）に挿入する無音の秒数。一呼吸とは別枠。"
+        "省略時はサーバー既定 SENTENCE_INTERVAL。0 で無効化",
+    )
+    tail_silence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="生成音声の末尾に付ける無音の秒数（連続生成時の詰まり防止）。"
+        "省略時はサーバー既定 TAIL_SILENCE。0 で無効化",
+    )
 
     @field_validator("input")
     @classmethod
