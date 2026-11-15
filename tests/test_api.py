@@ -7,6 +7,7 @@ TestClient をコンテキストマネージャなしで使うと lifespan が�
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -326,6 +327,156 @@ def test_registry_skips_invalid_dirs(tmp_path: Path) -> None:
     reg = ModelRegistry(root=tmp_path, device="cpu")
     reg.refresh()
     assert reg.model_names == ["valid"]
+
+
+# --- model_assets ホットリロード（話者・モデル追加に再起動不要） ---
+
+
+def test_registry_refresh_no_change_returns_false(tmp_path: Path) -> None:
+    write_fake_model(tmp_path, "m1")
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    assert reg.refresh() is True
+    assert reg.refresh() is False  # 差分無し（config.json も読み直さない）
+
+
+def test_registry_detects_added_model(tmp_path: Path) -> None:
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    reg.refresh()
+    assert reg.model_names == []
+    write_fake_model(tmp_path, "m2")
+    assert reg.refresh() is True
+    assert reg.model_names == ["m2"]
+    assert reg.get_entry("m2").speakers == ["m2"]
+
+
+def test_registry_detects_removed_model(tmp_path: Path) -> None:
+    write_fake_model(tmp_path, "m1")
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    reg.refresh()
+    shutil.rmtree(tmp_path / "m1")
+    assert reg.refresh() is True
+    assert reg.model_names == []
+
+
+def test_registry_detects_changed_checkpoint(tmp_path: Path) -> None:
+    model_dir = write_fake_model(tmp_path, "m1")
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    reg.refresh()
+    sig = reg.get_entry("m1").signature
+    (model_dir / "best.safetensors").write_bytes(b"retrained-checkpoint-bytes")
+    assert reg.refresh() is True
+    assert reg.get_entry("m1").signature != sig
+
+
+class _FakeTTSModel:
+    """TTSModel の検証用代替。load/unload を記録する（instance を生成順に captured に積む）"""
+
+    instances: list["_FakeTTSModel"] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.loaded = False
+        self.unloaded = False
+        _FakeTTSModel.instances.append(self)
+
+    def load(self) -> None:
+        self.loaded = True
+
+    def unload(self) -> None:
+        self.unloaded = True
+
+
+@pytest.fixture()
+def fake_tts_model(monkeypatch: pytest.MonkeyPatch) -> list[_FakeTTSModel]:
+    import style_bert_vits2_openai_tts_api.model_manager as mm
+
+    _FakeTTSModel.instances = []
+    monkeypatch.setattr(mm, "TTSModel", _FakeTTSModel)
+    return _FakeTTSModel.instances
+
+
+def test_removed_model_defers_unload_until_next_synthesis(
+    tmp_path: Path, fake_tts_model: list[_FakeTTSModel]
+) -> None:
+    write_fake_model(tmp_path, "m1")
+    write_fake_model(tmp_path, "m2")
+    reg = ModelRegistry(root=tmp_path, device="cpu", max_resident=5)
+    reg.refresh()
+    with reg.synthesis_lock:
+        reg.ensure_loaded("m1")
+    m1 = fake_tts_model[0]
+
+    shutil.rmtree(tmp_path / "m1")
+    reg.refresh()  # m1 は登録から外れるが、合成中かもしれないので即 unload はしない
+    assert reg.model_names == ["m2"]
+    assert m1.unloaded is False
+
+    with reg.synthesis_lock:  # 次の合成（synthesis_lock 取得時）にまとめて解放される
+        reg.ensure_loaded("m2")
+    assert m1.unloaded is True
+    assert reg.loaded_names() == ["m2"]
+
+
+def test_changed_model_reloads_on_next_synthesis(
+    tmp_path: Path, fake_tts_model: list[_FakeTTSModel]
+) -> None:
+    model_dir = write_fake_model(tmp_path, "m1")
+    reg = ModelRegistry(root=tmp_path, device="cpu")
+    reg.refresh()
+    with reg.synthesis_lock:
+        reg.ensure_loaded("m1")
+    assert len(fake_tts_model) == 1
+
+    # 無変化なら再ロードされない
+    with reg.synthesis_lock:
+        assert reg.ensure_loaded("m1") is fake_tts_model[0]
+    assert len(fake_tts_model) == 1
+
+    # 会話中にチェックポイントが更新された → 次回合成時に旧インスタンスを下ろして再ロード
+    (model_dir / "best.safetensors").write_bytes(b"retrained-checkpoint-bytes")
+    reg.refresh()
+    with reg.synthesis_lock:
+        reloaded = reg.ensure_loaded("m1")
+    assert len(fake_tts_model) == 2
+    assert fake_tts_model[0].unloaded is True
+    assert reloaded is fake_tts_model[1]
+
+
+def test_api_sees_added_model_without_restart(tmp_path: Path) -> None:
+    """model_assets（走査先）へ後から追加したモデル・話者が、再起動無しで
+    各 API と合成に反映されること"""
+    app = create_app()
+    app.state.registry.root = tmp_path  # 空の一時ディレクトリへ向けた状態で起動
+    app.state.registry.refresh()
+    client = TestClient(app)
+
+    ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+    assert "late" not in ids
+
+    write_fake_model(tmp_path, "late", voice="late")
+
+    ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+    assert "late" in ids
+    voices = client.get("/v1/audio/voices").json()["data"]
+    assert {"id": "late", "object": "voice", "model": "late"} in voices
+    # 合成リクエストからも見える（404 ではない。偽モデルなので 500 になり得る）
+    r = client.post("/v1/audio/speech", json={"model": "late", "input": "あ"})
+    assert r.status_code != 404
+
+
+def test_api_speech_gone_model_404_without_restart(tmp_path: Path) -> None:
+    app = create_app()
+    write_fake_model(tmp_path, "gone")
+    app.state.registry.root = tmp_path
+    app.state.registry.refresh()
+    client = TestClient(app)
+
+    r = client.post("/v1/audio/speech", json={"model": "gone", "input": "あ"})
+    assert r.status_code != 404
+
+    shutil.rmtree(tmp_path / "gone")
+    r = client.post("/v1/audio/speech", json={"model": "gone", "input": "あ"})
+    assert r.status_code == 404
+    assert r.json()["error"]["type"] == "not_found_error"
 
 
 def test_validate_assets_root_missing(tmp_path: Path) -> None:
