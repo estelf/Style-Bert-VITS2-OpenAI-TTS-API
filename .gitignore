@@ -25,3 +25,7 @@ uv.lock.bak
 
 # テスト用フィクスチャ（tests/conftest.py が生成する偽アセット。ネットワーク不要テスト用）
 /tests/fixtures/
+
+# バックグラウンド起動のログ・PID（README「バックグラウンド起動と常駐」参照）
+/server.log
+/server.pid
