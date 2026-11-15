@@ -88,6 +88,49 @@ uv run style-bert-vits2-openai-tts-api --host 0.0.0.0 --port 8000
 | `SBV2_PRETRAINED_ROOT` | `./pretrained` | 事前学習モデル置き場（コア共通） |
 | `SBV2_SKIP_PRETRAINED_DOWNLOAD` | （オフ） | 自動ダウンロード抑止（コア共通） |
 
+### バックグラウンド起動と常駐
+
+ターミナルから切り離して裏で動かすには `nohup` を使います（リポジトリルートで実行）:
+
+```bash
+nohup uv run style-bert-vits2-openai-tts-api > server.log 2>&1 &
+echo $! > server.pid
+```
+
+- ログ確認: `tail -f server.log`。初回起動は BERT の取得＋ロードで数分かかります（前述）。
+  `Uvicorn running on ...` が現れるか `curl http://127.0.0.1:8000/health` が応答すれば起動完了です
+- 停止: `kill $(cat server.pid)`。SIGTERM でモデルと pyopenjtalk ワーカーを解放してから終了するため、
+  緊急時を除き `kill -9` は避けてください（「制約・注意」参照）
+- uv 経由を経ずに正確な PID を扱いたい場合は、venv 内のエントリポイントを直接起動しても同じです:
+  `.venv/bin/style-bert-vits2-openai-tts-api`
+
+systemd で常駐させる場合は、次のユニットを配置します
+（例: `~/.config/systemd/user/sbv2-tts.service`。パスはリポジトリの絶対パスに読み替え）:
+
+```ini
+[Unit]
+Description=Style-Bert-VITS2 OpenAI TTS API
+
+[Service]
+WorkingDirectory=/path/to/Style-Bert-VITS2-OpenAI-TTS-API
+ExecStart=/path/to/Style-Bert-VITS2-OpenAI-TTS-API/.venv/bin/style-bert-vits2-openai-tts-api
+Restart=on-failure
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user start sbv2-tts
+journalctl --user -u sbv2-tts -f   # ログ追跡
+```
+
+- `WorkingDirectory` は `model_assets/`・`pretrained/`（既定の相対パス）の基準になるため必須です
+- `TimeoutStopSec` は SIGTERM 終了時のモデル解放に対する猶予です
+- ログイン終了後も止めずに動かし続けるには `loginctl enable-linger $USER`
+
 ## API
 
 ### `POST /v1/audio/speech`
