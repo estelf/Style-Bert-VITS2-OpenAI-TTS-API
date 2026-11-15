@@ -7,6 +7,8 @@
   4. 1 文字の G2P ウォームアップ（mecab / onnx 読み込み。合成は行わない）
   5. PRELOAD_MODELS 指定モデルの先読みロード（任意）と WARMUP_SYNTH（任意）
 モデルの遅延ロード・LRU 退避と合成は synthesis_lock で直列化される。
+model_assets の追加・更新・削除は各リクエスト処理前の registry.refresh() で反映される
+（差分検出は stat のみ。変更のあったモデルは次回合成時に自動的に再ロードされる）。
 """
 
 from __future__ import annotations
@@ -118,7 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # 4. G2P ウォームアップ（合成なし）
             await run_in_threadpool(_warmup_g2p)
 
-            # 5. モデル登録と任意の先読みロード
+            # 5. 初回のモデル登録（以降はリクエスト処理前に refresh でホットリロード）と任意の先読みロード
             registry.refresh()
             if not registry.entries:
                 raise StartupError(
@@ -193,6 +195,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        registry.refresh()  # model_assets の追加/削除を反映（差分が無ければ stat のみ）
         return {
             "status": "ok",
             "device": registry.device,
@@ -206,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/models")
     def list_models() -> dict[str, Any]:
+        registry.refresh()
         data = [
             {
                 "id": name,
@@ -219,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/audio/voices")
     def list_voices() -> dict[str, Any]:
+        registry.refresh()
         data = [
             {"id": voice, "object": "voice", "model": name}
             for name, entry in registry.entries.items()
@@ -244,6 +249,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def create_speech(req: SpeechRequest) -> Response:
         # 注: response_format（flac のみ）と speed の範囲は SpeechRequest のスキーマで検証され、
         # 失敗は RequestValidationError 経由で上記 exception_handler が OpenAI 形式の 400 JSON に変換する
+        # 再起動無しで model_assets に追加したモデルをこのリクエストから見えるようにする
+        await run_in_threadpool(registry.refresh)
         try:
             entry = registry.get_entry(req.model)
             speaker_id = registry.speaker_id(entry, req.voice)
